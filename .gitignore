@@ -1,0 +1,12 @@
+# Station runtime data (recordings, crypto seed) and logs
+station_data/
+station.log*
+
+# Installer, over the GitHub 100 MB limit
+*.dmg
+
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+.env

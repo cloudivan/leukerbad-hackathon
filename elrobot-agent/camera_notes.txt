@@ -1,0 +1,24 @@
+Camera index 0 = TOP-DOWN overview, fixed above the table, looking straight down.
+  The robot base is at the top centre of the picture and the arm points DOWN the picture.
+  Picture DOWN  = +X (forward, away from the base).
+  Picture RIGHT = +Y (the robot's left).  Picture LEFT = -Y.
+  Use it for x and y: where the object is relative to the base and to the gripper. It shows no height.
+  The laptop at the right edge of this picture is the side camera (index 2).
+
+Camera index 1 = WRIST camera, mounted on the arm behind the jaws, moves with the gripper.
+  It looks down and forward. The two dark shapes at the bottom edge are the jaws.
+  With yaw 0: picture UP = +X (forward), picture LEFT = +Y.
+  WARNING, parallax: an object that appears just above or between the jaws in this picture is
+  really several centimetres IN FRONT of the jaw tips. Never decide from this camera alone that
+  the jaws are over the object.
+
+Camera index 2 = SIDE view from the laptop, fixed at table height on the robot's left (+Y side).
+  The robot base is on the right of the picture and the arm reaches to the LEFT.
+  Picture LEFT = +X (forward).  Picture UP = +Z (height).  It shows no left/right (y).
+  Use it for depth: how far in front of the jaw tips the object is, and how high the tips are
+  above the table. The jaws are correctly placed in x when the jaw tips are directly above the
+  object in this picture.
+
+Procedure that works: find the object's x and y in camera 0, move above it, then confirm in
+camera 2 that the jaw tips are directly above it before going down. If camera 2 shows the object
+further left than the tips, move +x; further right, move -x.

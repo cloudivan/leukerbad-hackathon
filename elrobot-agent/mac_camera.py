@@ -8,7 +8,7 @@ camera access to apps you allowed, and Terminal already has it for Station.
     GET /frame.jpg        newest frame (downscaled to MAX_WIDTH)
     GET /info             which camera index is used, its size, and the indexes found
     GET /probe/<i>.jpg    startup snapshot of camera index i (to tell the cameras apart)
-    GET /select/<i>       switch to camera index i without restarting
+    POST /select/<i>      switch to camera index i without restarting (curl -X POST ...)
 
 Camera choice: MAC_CAMERA_INDEX in .env, or automatic = the camera with the largest
 picture (the FaceTime camera is 1080p, the kit cameras are smaller).
@@ -22,7 +22,7 @@ from pathlib import Path
 
 import cv2
 from dotenv import load_dotenv
-from flask import Flask, Response, abort, jsonify
+from flask import Flask, Response, abort, jsonify, request
 
 HERE = Path(__file__).resolve().parent
 load_dotenv(HERE / ".env")
@@ -32,6 +32,7 @@ MAX_WIDTH = 1024                        # ADJUST: frames are downscaled to this 
 INDEX = os.environ.get("MAC_CAMERA_INDEX", "auto").strip()   # ADJUST: "auto" or 0, 1, 2 ...
 
 app = Flask(__name__)
+ALLOWED_HOSTS = {f"{HOST}:{PORT}", f"localhost:{PORT}"}   # blocks DNS rebinding from web pages
 _lock = threading.Lock()
 _latest: tuple[float, bytes, int, int] | None = None   # (time, jpeg, width, height)
 _chosen = {"index": None, "width": 0, "height": 0}
@@ -129,6 +130,12 @@ def capture_loop(cap: cv2.VideoCapture) -> None:
         time.sleep(0.1)                 # about 10 fps is plenty
 
 
+@app.before_request
+def only_local_host():
+    if request.host not in ALLOWED_HOSTS:
+        abort(403)
+
+
 @app.get("/probe/<int:index>.jpg")
 def probe(index: int):
     """Startup snapshot of one camera index, to find out which index is which camera."""
@@ -137,7 +144,7 @@ def probe(index: int):
     return Response(_probes[index], mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
-@app.get("/select/<int:index>")
+@app.post("/select/<int:index>")
 def select(index: int):
     """Switch the served camera at runtime (no restart needed)."""
     global _switch_to

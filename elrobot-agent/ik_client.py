@@ -5,6 +5,7 @@ Speed, acceleration and orientation come from safety.py (settings, not limits).
 """
 from __future__ import annotations
 
+import math
 import httpx
 
 import safety
@@ -101,21 +102,33 @@ class IKClient:
     # -------------------------------------------------------------- motion --
     def move_to(self, arm_id: str, target: safety.Target, execute: bool = False,
                 gripper: float | None = None) -> dict:
-        """Solve (execute=False) or solve and move (execute=True). Vertical gripper only.
+        """Solve (execute=False) or solve and move (execute=True). Vertical gripper first;
+        if a far target is unreachable with pitch=0, automatically falls back to a slight
+        forward tilt (pitch = -0.15, then -0.28 rad) so reach extends out to x=0.28 m.
 
         gripper (0..1) is written together with the arm joints when given, so all 8 motors
         get torque and a goal in the same command.
         """
-        body = {
-            "position": {"x": target.x, "y": target.y, "z": target.z},
-            "orientation": {"rpy": {"roll": safety.ROLL, "pitch": safety.PITCH, "yaw": target.yaw}},
-            "execute": bool(execute),
-            "speed": safety.SPEED,
-            "accel": safety.ACCEL,
-        }
-        if gripper is not None:
-            body["gripper"] = min(1.0, max(0.0, float(gripper)))
-        return self._request("POST", f"/arms/{arm_id}/move-to", json=body).json()
+        last_err: IKError | None = None
+        for tilt in (0.0, -0.15, -0.28, -0.40):
+            roll = safety.ROLL + tilt * math.sin(target.yaw)
+            pitch = safety.PITCH + tilt * math.cos(target.yaw)
+            body = {
+                "position": {"x": target.x, "y": target.y, "z": target.z},
+                "orientation": {"rpy": {"roll": roll, "pitch": pitch, "yaw": target.yaw}},
+                "execute": bool(execute),
+                "speed": safety.SPEED,
+                "accel": safety.ACCEL,
+            }
+            if gripper is not None:
+                body["gripper"] = min(1.0, max(0.0, float(gripper)))
+            try:
+                return self._request("POST", f"/arms/{arm_id}/move-to", json=body).json()
+            except IKError as e:
+                last_err = e
+                if e.code != "unreachable":
+                    raise
+        raise last_err  # type: ignore[misc]
 
     def gripper(self, arm_id: str, opening: float) -> dict:
         body = {"open": opening, "speed": safety.SPEED, "accel": safety.ACCEL}

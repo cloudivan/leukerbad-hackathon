@@ -9,4 +9,7 @@ dependencies = [
     "python-dotenv",
     "flask",
     "opencv-python-headless>=5.0.0.93",
+    "mujoco>=4.0.1",
+    "pyarrow>=26.0.1",
+    "pillow>=13.0.0",
 ]

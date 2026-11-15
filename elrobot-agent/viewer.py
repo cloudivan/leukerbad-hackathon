@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
-from flask import Flask, Response, abort, jsonify, send_from_directory
+from flask import Flask, Response, abort, jsonify, request, send_from_directory
 
 HERE = Path(__file__).resolve().parent
 PHOTOS = HERE / "photos"
@@ -26,6 +26,15 @@ IK_URL = os.environ.get("IK_URL", "http://127.0.0.1:8020").rstrip("/")
 MAC_CAMERA_URL = os.environ.get("MAC_CAMERA_URL", "http://127.0.0.1:5060").strip().rstrip("/")
 
 app = Flask(__name__)
+ALLOWED_HOSTS = {f"{HOST}:{PORT}", f"localhost:{PORT}"}   # blocks DNS rebinding from web pages
+
+
+@app.before_request
+def only_local_host():
+    if request.host not in ALLOWED_HOSTS:
+        abort(403)
+
+
 ik = httpx.Client(base_url=IK_URL + "/api/v1", timeout=httpx.Timeout(4.0, connect=1.0))
 
 PAGE = """<!doctype html>

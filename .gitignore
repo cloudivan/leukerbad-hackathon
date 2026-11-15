@@ -10,3 +10,12 @@ __pycache__/
 *.pyc
 .venv/
 .env
+
+# Local editor/backup files
+.obsidian/
+*.bak_*
+
+# Training artifacts
+checkpoints/
+*.parquet
+smolvla-bundle.zip

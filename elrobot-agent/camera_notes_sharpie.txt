@@ -1,0 +1,37 @@
+Camera index 0 = overview (re-measured 15.11.2026 15:41 with commanded moves at z 0.08).
+  The arm hangs into the picture from the TOP; the paper is in the middle, the brown cardboard square LEFT of the paper.
+  - +X (forward, away from the base) = picture UP. Measured: x 0.163 -> 0.203 moved the jaws clearly up, almost no sideways shift.
+  - Y = picture LEFT/RIGHT. The sign is NOT measured yet: make one 0.01 m test step in y at hover and see which way the jaws move.
+  - Higher z also looks higher in the picture, so compare x only at the same z.
+
+GROUND-TRUTH WORKSPACE & FLOOR CALIBRATION:
+  - RE-MEASURED 15.11.2026 15:30 (4 paper corners, hand-guided): the table is NOT at z 0 any more. Floor plane:
+      z_floor = 0.0056 + 0.083 * x + 0.011 * y   (+-5 mm)
+    e.g. z_floor 0.018 at (x 0.15, y 0), 0.021 at (0.18, 0.03), 0.023 at (0.21, 0.04), 0.025 at (0.24, 0).
+    Every height below is ABOVE THIS FLOOR: grip z = z_floor(x, y) + offset. Never command z below z_floor(x, y) - 0.002.
+  - Under torque the arm sags 2..8 mm BELOW the commanded z (more at long reach), so the real tips are lower than commanded.
+  - NEVER change x or y while z < 0.065 m! Always lift straight up to z = 0.075 m before making ANY horizontal (x, y) adjustment, or the open jaws will sweep and push the object across the table!
+
+Camera index 1 = WRIST camera (re-mounted 15.11.2026 afternoon), on the gripper, rotates with yaw.
+  The two black jaws are at the bottom of the frame; it looks forward along the jaws at a shallow angle (sees far across the table).
+  Directions for a vertical gripper at yaw 1.5708 are NOT measured yet: use Camera 1 only to check that the object sits
+  between the jaws (centered left-right) before closing, and Camera 0 for x/y positioning.
+
+OBJECTS IN THIS SCENE:
+  - Sharpie marker: a cylinder about 12 to 15 mm thick and about 13 to 14 cm long, lying flat on the table.
+    Check its direction in Camera 0: along X (left-right in Camera 0) -> yaw 1.5708; along Y (up-down in Camera 0) -> yaw 0.
+    It is round and can roll sideways (in Y) if a jaw touches it before the other: center Y precisely before going down.
+  - Cardboard (Karton): the flat target on the table. Its top surface is at z = CARDBOARD_TOP_Z (see the task message).
+
+Procedure for "pick the sharpie, place it on the cardboard":
+  1. If z < 0.065 m, lift straight up to z = 0.075 m first.
+  2. Find the sharpie and the cardboard in Camera 0. Estimate the sharpie's middle (half of its length) and the cardboard's center.
+  3. Open the gripper (gripper(1.0)), move to a pre-pose above the sharpie's MIDDLE at z = 0.075, yaw = 1.5708.
+  4. Center it in Camera 1: the sharpie must run vertically through the picture, exactly on the midline between the two jaws,
+     level with the jaw tips. Correct y first (0.005 to 0.010 m steps), then x (decrease x if it appears beyond the tips).
+  5. Straight down to z = z_floor(x, y) + 0.007 (about 0.028 near the sharpie; keep x, y, yaw identical). Check Camera 1: a visible gap on both sides between sharpie and each jaw.
+  6. Close (gripper(0.0)). "stalled" = held. "reached" = missed: open, lift to 0.075, re-center, retry once.
+  7. Lift straight up to z = 0.080 (do not go higher than the reach table allows at this x).
+  8. Move at z = 0.075 to above the cardboard's center (the cardboard must stay within reach: x <= 0.22 at z 0.075).
+  9. Lower straight down to z = z_floor(x, y) + CARDBOARD_TOP_Z + 0.015 (about 0.042), open the gripper (gripper(1.0)), then lift straight up to z = 0.075.
+  10. Check Camera 0: the sharpie lies on the cardboard. Done.

@@ -1,0 +1,36 @@
+Camera index 0 = overview, CALIBRATED (calib/overview_homography.json). Do not estimate positions from it yourself:
+  look at Camera 0, find the pixel (u, v) of the object's center and of the target's center, and call locate(u, v).
+  Use the returned x, y directly. If locate says not reachable_from_above, stop and ask the user to move the object.
+  If locate returns no_calibration, fall back to: one 0.02 m test step in +x and +y at hover to learn the picture directions.
+
+GROUND-TRUTH WORKSPACE & FLOOR CALIBRATION:
+  - RE-MEASURED 15.11.2026 15:30 (4 paper corners, hand-guided): the table is NOT at z 0 any more. Floor plane:
+      z_floor = 0.0056 + 0.083 * x + 0.011 * y   (+-5 mm)
+    e.g. z_floor 0.018 at (x 0.15, y 0), 0.021 at (0.18, 0.03), 0.023 at (0.21, 0.04), 0.025 at (0.24, 0).
+    Every height below is ABOVE THIS FLOOR: grip z = z_floor(x, y) + offset. Never command z below z_floor(x, y) - 0.002.
+  - Under torque the arm sags 2..8 mm BELOW the commanded z (more at long reach), so the real tips are lower than commanded.
+  - NEVER change x or y while z < 0.065 m! Always lift straight up to z = 0.075 m before making ANY horizontal (x, y) adjustment, or the open jaws will sweep and push the object across the table!
+
+Camera index 1 = WRIST camera (re-mounted 15.11.2026 afternoon), on the gripper, rotates with yaw.
+  The two black jaws are at the bottom of the frame; it looks forward along the jaws at a shallow angle (sees far across the table).
+  Its picture directions are NOT measured: learn them with one small 0.01 m test step at hover (x, then y) and see which way
+  the object moves in Camera 1. Use Camera 1 to center the object between the jaws before closing.
+
+OBJECTS IN THIS SCENE: the object to pick and the target are named in the task message.
+  - Grip a flat round object (disc, badge, lid) across its diameter; any yaw works, choose a reachable one.
+  - Grip a long object across its narrow width at its middle (handle for tools, never a blade).
+  - The target (brown box / cardboard) top is at z = z_floor + TARGET_TOP_Z (task message).
+
+Procedure for "pick the object, place it on the target":
+  1. If z < 0.065 m, lift straight up to z = 0.080 m first. Do not open the gripper before that.
+  2. Find the object and the target in Camera 0 and get both positions with locate(u, v).
+  3. Open the gripper (gripper(1.0)), move to a pre-pose above the object at z = 0.080.
+  4. Fine-center with Camera 1 only if the object is clearly off the jaw midline (steps of 0.005 m); trust locate otherwise.
+     If Camera 1 returns exactly the same picture twice in a row, it is frozen: ignore it and use Camera 0 only.
+  5. Straight down to grip height (task message; keep x, y, yaw identical).
+  6. Close (gripper(0.0)). "stalled" = held. "missed" = open, lift to 0.080, re-center, retry.
+  7. Lift straight up to z = 0.080.
+  8. Move at z = 0.080 to above the target's center. If unreachable, use the nearest reachable point still well inside the target.
+  9. Lower STRAIGHT down (same x, y) to the release height from the task message. It is ~3 cm above the target on
+     purpose: do not go lower, the object drops the rest. Open the gripper there, then lift straight up to z = 0.080.
+  10. Check Camera 0: the object lies on the target. Done.

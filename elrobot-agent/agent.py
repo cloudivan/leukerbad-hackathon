@@ -59,10 +59,10 @@ VERBOSE = os.environ.get("VERBOSE", "1").strip() != "0"
 
 # Optional third camera: the MacBook's own camera, served by mac_camera.py (side view).
 MAC_CAMERA_URL = os.environ.get("MAC_CAMERA_URL", "http://127.0.0.1:5060").strip().rstrip("/")
-CAMERA_NOTES_FILE = HERE / "camera_notes.txt"    # what each camera shows, appended to the prompt
+CAMERA_NOTES_FILE = HERE / os.environ.get("CAMERA_NOTES", "camera_notes.txt")  # appended to the prompt; per-task override
 
 PROGRESS_WORDS = {"get_state": "checking the arm", "look": "looking", "move_to": "moving",
-                  "gripper": "moving the gripper", "go_rest": "returning to rest"}
+                  "gripper": "moving the gripper", "go_rest": "returning to rest", "locate": "locating"}
 
 
 SYSTEM_PROMPT = f"""You control one ElRobot follower arm (7 joints plus a parallel-jaw gripper) on a table, \
@@ -85,20 +85,19 @@ at z 0.08, and nothing above z 0.10. To reach far, go low. "unreachable" at the 
 How to work:
 - Call get_state before the first move, and look at a camera before you plan.
 - Every executed move_to automatically returns fresh photos from BOTH cameras (Camera 0 front overview and Camera 1 wrist) with its result, so do not call look after a move.
-- Use Camera 1 (wrist) to center the object left-to-right (Y) between the two black jaws (zero Y parallax). Use Camera 0 (front overview, looking back at the base: picture down = +X, picture right = +Y) to align forward reach (X) until the jaw tips sit directly above the object. Camera 0 has parallax in X: a jaw that looks above an object can still be 1 to 3 cm off in X. At grip height Camera 1 decides: if the object sits at the bottom edge of Camera 1 (between the finger bases, not between the tips) or under one jaw, do NOT close. Lift straight up to z 0.075, correct x (see the parallax note in the camera notes: decrease x, not increase) and/or y, then go down again.
-- For the final X decision Camera 1 OVERRIDES Camera 0. Camera 0 is only for the rough first approach. If at hover \
-the object appears beyond the jaw tips (higher in Camera 1), decrease x until the object's body sits level with the \
-jaw tips; never go back to a larger x because Camera 0 "looks" aligned. (Last miss: Camera 0 looked aligned at x 0.195, \
-but the charger was 1.5 to 2 cm closer to the base and the jaws closed in front of it.)
-- Y must be centered precisely at hover: the object's center must sit on the vertical midline between the two jaws in Camera 1. If it is even slightly right or left of the midline, correct y by 0.005 to 0.015 m (picture right = +y at yaw 1.5708) BEFORE going down. A charger that sat a little right at hover ended up under the right jaw at grip height.
+- Use Camera 1 (wrist) to center the object left-to-right (Y) between the two black jaws (zero Y parallax). Use Camera 0 (overview; its picture directions are in the camera notes below, they override anything else here) to align forward reach (X) until the jaw tips sit directly above the object. Camera 0 has parallax in X: a jaw that looks above an object can still be 1 to 3 cm off in X. At grip height Camera 1 decides: if the object sits at the bottom edge of Camera 1 (between the finger bases, not between the tips) or under one jaw, do NOT close. Lift straight up to z 0.075, correct x and/or y, then go down again.
+- For the final X decision Camera 1 OVERRIDES Camera 0. Camera 0 is only for the rough first approach. If the \
+camera notes do not give Camera 1 directions for your yaw, learn them: make one small 0.01 m step in x (or y) at hover \
+height, see which way the object moves in Camera 1, then correct in the right direction.
+- Y must be centered precisely at hover: the object's center must sit on the vertical midline between the two jaws in Camera 1. If it is even slightly right or left of the midline, correct y by 0.005 to 0.015 m (direction per the camera notes, or learned from one small test step) BEFORE going down. A charger that sat a little right at hover ended up under the right jaw at grip height.
 - Before closing, look at the grip-height photo of Camera 1: the white body must have a visible gap of wood or shadow on BOTH sides between it and each jaw. If it touches or overlaps a jaw, lift and correct y.
 - If the object is turned (not lying along X or Y), set yaw so the jaws close across its narrow width: yaw = 1.5708 plus the object's rotation angle as seen in Camera 0.
 - Be decisive: when Camera 1 shows the object centered between the jaws and Camera 0 shows the jaw tips directly above the object, go straight down and close. Do not keep re-photographing an unchanged scene.
 - One command at a time. Each tool call returns when the motion has ended.
 - The collision check knows the arm and the table, not the objects. Plan the path yourself: go to a pre-pose \
 0.03 to 0.05 m above the object (e.g. z = 0.075 to 0.08 m), move straight down to grip height (the physical floor \
-with a vertical gripper is at z = 0.000 (measured 15.11.2026, +-3 mm over the whole table); the arm also sags 2 to 8 mm \
-below the commanded z, more at long reach. Never command z below 0.005. Grip a ~20 mm object lying flat at z = 0.008 to 0.012), and lift straight up before \
+height is given in the camera notes; if they give a floor plane z_floor(x, y), all heights are relative to it and it \
+overrides any fixed number here; the arm also sags 2 to 8 mm below the commanded z), and lift straight up before \
 any sideways move. NEVER change x or y while z < 0.065 m, or the jaws will push the object across the table!
 - Positioning accuracy is only 1 to 2 cm. Do not plan anything finer.
 - Pick: open the gripper, pre-pose above, straight down to grip height, close with gripper(0). "stalled" on a \
@@ -164,7 +163,21 @@ TOOLS = [
           "Move to the safe rest pose above the table in small checked steps (lifts first). Call it when the "
           "task is finished.",
           {}, []),
+    _tool("locate",
+          "Convert a point in the latest Camera 0 (overview) photo into exact table coordinates, using the "
+          "camera calibration. Give the pixel (u = column from the left, v = row from the top) of the CENTER of "
+          "the object or target where it touches the table, in the photo's own size (e.g. 299x224). Returns "
+          "x, y in meters, the floor height there, and whether a vertical grip there is within reach. ALWAYS use "
+          "this for object and target positions instead of estimating coordinates from the picture.",
+          {"u": {"type": "number", "description": "pixel column in the Camera 0 photo"},
+           "v": {"type": "number", "description": "pixel row in the Camera 0 photo"}},
+          ["u", "v"]),
 ]
+
+CALIB_FILE = HERE / "calib" / "overview_homography.json"
+REACH_FROM_ABOVE = 0.235   # m, horizontal radius a vertical grip near the table can reach (ADJUST)
+SAFE_TRAVEL_Z = 0.060      # m, x/y may only change when start and target are both at or above this (ADJUST)
+SIDEWAYS_TOL = 0.005       # m, small x/y corrections allowed at any height (ADJUST)
 
 
 class Abort(Exception):
@@ -242,6 +255,10 @@ class Session:
     def _list_cameras(self) -> list[dict]:
         dead_ids = {"f9a49c847e496cac500305ae1f0a178e", "28ff0ca87978e8f993c2ac64a84d188a"}
         cams = [c for c in self.ik.cameras() if c["id"] not in dead_ids]
+        # Fixed numbering: IDs in CAMERA_ORDER (comma list, overview first) come first in that order.
+        # Station's list order is not stable, and the prompt depends on Camera 0 = overview, 1 = wrist.
+        order = [s.strip() for s in os.environ.get("CAMERA_ORDER", "").split(",") if s.strip()]
+        cams.sort(key=lambda c: order.index(c["id"]) if c["id"] in order else len(order))
         mac = self._mac_camera()
         if mac:
             cams.append(mac)
@@ -407,6 +424,20 @@ class Session:
         return result
 
     def tool_move_to(self, x: float, y: float, z: float, yaw: float) -> str | list[dict]:
+        # Hard rule (15.11.2026): sideways moves only at travel height. The model lowered early and crept
+        # sideways near the table, dragging the object and pushing the target box. Up/down moves are always
+        # allowed, so the only way to a target is: lift, move over it high, go straight down, release, lift.
+        start = self.last_target
+        if start is None:
+            pose = self._pose_of(self._arm())
+            start = pose if pose is not None else None
+        if start is not None:
+            dxy = math.hypot(float(x) - start.x, float(y) - start.y)
+            if dxy > SIDEWAYS_TOL and min(start.z, float(z)) < SAFE_TRAVEL_Z:
+                return (f"REJECT_LOW_SIDEWAYS: this changes x/y by {dxy * 1000:.0f} mm while the jaws are (or would be) "
+                        f"below z {SAFE_TRAVEL_Z}. Lift straight up first (same x, y) to z >= {SAFE_TRAVEL_Z}, move "
+                        f"over the target at that height, then go straight down. If the target is only reachable "
+                        f"low, it is out of reach: stop and ask the user to move it closer.")
         result = self._execute_move(Target(float(x), float(y), float(z), float(yaw)))
         if not result["ok"]:
             return result["reason"]
@@ -429,6 +460,11 @@ class Session:
         current = self._pose_of(arm)
         if current is None:
             return "ERROR no_pose: the arm pose is unknown, so the arm cannot be held while the jaws move."
+        # Guard (15.11.2026): opening the jaws while the arm still lies low and uncommanded swept the
+        # Sharpie across the paper. Lift first; releasing an object later (after a move_to) stays allowed.
+        if self.last_target is None and current.z < 0.065 and before is not None and opening > before + 0.05:
+            return ("REJECT_GRIPPER: the arm is still low (z %.3f) and has not been moved this task. "
+                    "First move_to straight up (same x, y) to z 0.080, then open." % current.z)
         # Hold pose: the last commanded target, or where the arm is now. The jaws are moved through a
         # move_to at that pose so the 7 arm motors are re-commanded and keep torque in the same write.
         hold = self.last_target or Target(current.x, current.y, current.z, current.yaw)
@@ -479,9 +515,12 @@ class Session:
                            "note": "jaws met an object and hold it; grip relieved to avoid servo overload"})
             status = "stalled"
         elif closing and opening == 0.0:
-            result["note"] = "closed fully: nothing was gripped"
-            self.last_motion = {"tool": "gripper", "status": status}
-            raise Abort("gripper closed fully without gripping the object (stopped after fail)")
+            # 15.11.2026: a miss used to abort the whole task. Now it is a normal result so the model retries.
+            result.update({"ok": False, "status": "missed",
+                           "note": "closed fully: nothing was gripped. Open the gripper, lift straight up to z 0.080, "
+                                   "re-center with the cameras, then go down and close again."})
+            self.last_motion = {"tool": "gripper", "status": "missed"}
+            return json.dumps(result)
         elif status in ("timeout", "unknown"):
             result["note"] = f"{status.upper()}: call get_state before doing anything else."
         self.last_motion = {"tool": "gripper", "status": status}
@@ -515,6 +554,25 @@ class Session:
         result = self.go_rest()
         return result["reason"] if not result["ok"] else json.dumps(result)
 
+    def tool_locate(self, u: float, v: float) -> str:
+        """Pixel in the Camera 0 photo -> table x, y via the saved homography (calib_overview.py)."""
+        if not CALIB_FILE.exists():
+            return "ERROR no_calibration: run calib_overview.py first; estimate positions from the photos meanwhile."
+        cal = json.loads(CALIB_FILE.read_text())
+        self.cameras = self._list_cameras()
+        if not self.cameras or self.cameras[0]["id"] != cal["camera_id"]:
+            return "ERROR calibration is for another camera than Camera 0; check CAMERA_ORDER."
+        H = cal["H_pixel_to_xy"]
+        w = H[2][0] * u + H[2][1] * v + H[2][2]
+        x = (H[0][0] * u + H[0][1] * v + H[0][2]) / w
+        y = (H[1][0] * u + H[1][1] * v + H[1][2]) / w
+        floor = 0.0056 + 0.083 * x + 0.011 * y      # floor plane 15.11.2026, see camera notes
+        r = math.hypot(x, y)
+        return json.dumps({"x": round(x, 4), "y": round(y, 4), "z_floor": round(floor, 4),
+                           "reach_radius": round(r, 3), "reachable_from_above": r <= REACH_FROM_ABOVE,
+                           "accuracy_mm": cal.get("rms_mm"),
+                           "note": "if not reachable_from_above, tell the user to move the object closer to the base"})
+
     def run_tool(self, name: str, args: dict) -> tuple[str | list[dict], bool]:
         """Returns (tool_result content, is_error)."""
         try:
@@ -528,6 +586,8 @@ class Session:
                 out = self.tool_gripper(args["open"])
             elif name == "go_rest":
                 out = self.tool_go_rest()
+            elif name == "locate":
+                out = self.tool_locate(args["u"], args["v"])
             else:
                 return f"ERROR unknown tool '{name}'", True
         except IKError as e:

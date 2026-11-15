@@ -1,0 +1,30 @@
+{
+ "camera_id": "43640b79a54e71f45e0443ffbb92880a",
+ "H_pixel_to_xy": [
+  [
+   -0.003415692143482815,
+   -0.012956485320579657,
+   3.9166242382943843
+  ],
+  [
+   -0.016116051319932538,
+   0.0035716289048323547,
+   2.2888097083804433
+  ],
+  [
+   -0.006186625396228984,
+   0.03483433413644012,
+   1.0
+  ]
+ ],
+ "image_size": [
+  299,
+  224
+ ],
+ "points": 9,
+ "rms_mm": 7.9,
+ "max_mm": 12.6,
+ "source": "/Users/mac/Developer/leukerbad-hackathon/elrobot-agent/logs/calib_overview_20261115_164257",
+ "time": "2026-11-15 16:45",
+ "z_note": "fitted at tip height ~12 mm above the table, pixel -> commanded x, y"
+}

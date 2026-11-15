@@ -31,7 +31,7 @@ FOLLOWER_ID = os.environ.get("FOLLOWER_ID", "5B79015365").strip()
 
 # ---------------------------------------------------------------- ADJUST ----
 PROBE_X = [0.15, 0.19, 0.23]  # ADJUST: x positions to probe (m), y = 0
-PROBE_Y = 0.0                 # ADJUST
+PROBE_Y = float(os.environ.get("PROBE_Y", "0.0"))  # ADJUST: keep the probe line clear of objects
 HOVER_Z = 0.070               # ADJUST: travel height between probes
 START_Z = 0.045               # ADJUST: fast descent to here, then fine steps
 STEP_Z = 0.002                # ADJUST: fine step (m)

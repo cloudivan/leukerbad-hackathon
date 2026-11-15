@@ -134,6 +134,10 @@ def capture_loop(cap: cv2.VideoCapture) -> None:
 def only_local_host():
     if request.host not in ALLOWED_HOSTS:
         abort(403)
+    if request.method != "GET":   # CSRF: other web pages must not switch the camera the agent sees
+        origin = request.headers.get("Origin")
+        if origin is not None and origin not in {f"http://{h}" for h in ALLOWED_HOSTS}:
+            abort(403)
 
 
 @app.get("/probe/<int:index>.jpg")

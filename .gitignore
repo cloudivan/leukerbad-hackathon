@@ -19,3 +19,7 @@ __pycache__/
 checkpoints/
 *.parquet
 smolvla-bundle.zip
+
+# Demo recordings (large) and Station logs
+elrobot-agent/demo_runs/**/*.mp4
+station_*.log

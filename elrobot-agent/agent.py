@@ -17,6 +17,7 @@ Safety model:
 from __future__ import annotations
 
 import base64
+import io
 import json
 import math
 import os
@@ -27,6 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 import anthropic
+from PIL import Image
 import httpx
 from dotenv import load_dotenv
 
@@ -62,8 +64,17 @@ MAC_CAMERA_URL = os.environ.get("MAC_CAMERA_URL", "http://127.0.0.1:5060").strip
 CAMERA_NOTES_FILE = HERE / os.environ.get("CAMERA_NOTES", "camera_notes.txt")  # appended to the prompt; per-task override
 
 PROGRESS_WORDS = {"get_state": "checking the arm", "look": "looking", "move_to": "moving",
-                  "gripper": "moving the gripper", "go_rest": "returning to rest", "locate": "locating"}
+                  "gripper": "moving the gripper", "go_rest": "returning to rest", "locate": "locating", "pick": "picking", "place": "placing"}
 
+
+# Opt-in (run_place.sh sets it): keep going through motor_error / ARM_SAGGING instead of stopping.
+# Safe default = stop. Even with KEEP_GOING=1 a task aborts after MAX_SAG_CONTINUES sag events.
+KEEP_GOING = os.environ.get("KEEP_GOING", "0") == "1"
+MAX_SAG_CONTINUES = int(os.environ.get("MAX_SAG_CONTINUES", "3"))
+_ERR_RULE = ("If a tool reports not_calibrated, stop and tell the user. If a tool reports motor_error or ARM_SAGGING, "
+             "do NOT stop: call get_state, wait a moment, retry the step once and carry on with the task (the user is "
+             "standing by with the e-stop). Mention the errors in your final answer." if KEEP_GOING else
+             "If a tool reports not_calibrated or motor_error, stop and tell the user.")
 
 SYSTEM_PROMPT = f"""You control one ElRobot follower arm (7 joints plus a parallel-jaw gripper) on a table, \
 through a small set of tools. The demo is for the "Sustainable City" hackathon track; a typical task is to pick \
@@ -106,8 +117,7 @@ means nothing was gripped.
 - "stalled" on an arm move is a problem: stop moving, look at a camera, then decide. "timeout" or "unknown": \
 call get_state before anything else.
 - "unreachable" and "collision" come from the kinematics. Change the target; do not repeat the same request.
-- You cannot calibrate, change torque or change settings. If a tool reports not_calibrated or motor_error, stop \
-and tell the user.
+- You cannot calibrate, change torque or change settings. {_ERR_RULE}
 - If a tool result says "dry run, not executed", the arm did not move. Keep planning as if it had, and say \
 clearly in your final answer that this was a dry run.
 - You have at most {MAX_TOOL_CALLS} tool calls per task, so do not spend them on repeated photos of the same \
@@ -166,18 +176,59 @@ TOOLS = [
     _tool("locate",
           "Convert a point in the latest Camera 0 (overview) photo into exact table coordinates, using the "
           "camera calibration. Give the pixel (u = column from the left, v = row from the top) of the CENTER of "
-          "the object or target where it touches the table, in the photo's own size (e.g. 299x224). Returns "
+          "the object or target where it touches the table, in the coordinates of the Camera 0 photo you were given (its size is stated with it). Returns "
           "x, y in meters, the floor height there, and whether a vertical grip there is within reach. ALWAYS use "
           "this for object and target positions instead of estimating coordinates from the picture.",
           {"u": {"type": "number", "description": "pixel column in the Camera 0 photo"},
            "v": {"type": "number", "description": "pixel row in the Camera 0 photo"}},
           ["u", "v"]),
+    _tool("pick",
+          "Pick an object in ONE call (fast, preferred): lifts if low, moves over (x, y) at the travel height, opens "
+          "the jaws there, goes straight down slowly in 1 cm steps to grip_z, closes, lifts straight up. Returns the steps, HELD or "
+          "MISSED, and photos from both cameras. Get x, y from locate.",
+          {"x": {"type": "number", "description": "object center x, m (from locate)"},
+           "y": {"type": "number", "description": "object center y, m (from locate)"},
+           "yaw": {"type": "number", "description": "jaw rotation, rad. Use 0 (the calibrated yaw, most accurate) for round objects; other yaws shift the grip point up to ~2 cm"},
+           "grip_z": {"type": "number", "description": "jaw tip height for the grip, m (from the task message)"}},
+          ["x", "y", "yaw", "grip_z"]),
+    _tool("place",
+          "Place the held object in ONE call (fast, preferred): lifts if low, moves over (x, y) at the travel "
+          "height, goes straight down to release_z, opens, lifts straight up. Returns the steps and photos.",
+          {"x": {"type": "number", "description": "target center x, m (from locate)"},
+           "y": {"type": "number", "description": "target center y, m (from locate)"},
+           "release_z": {"type": "number", "description": "height to open the jaws at, m (from the task message)"}},
+          ["x", "y", "release_z"]),
 ]
 
 CALIB_FILE = HERE / "calib" / "overview_homography.json"
-REACH_FROM_ABOVE = 0.235   # m, horizontal radius a vertical grip near the table can reach (ADJUST)
+REACH_FROM_ABOVE = 0.235   # m, no longer used: since 15.11.2026 locate checks reach with the IK solver
 SAFE_TRAVEL_Z = 0.060      # m, x/y may only change when start and target are both at or above this (ADJUST)
 SIDEWAYS_TOL = 0.005       # m, small x/y corrections allowed at any height (ADJUST)
+GRIP_SPEED = int(os.environ.get("GRIP_SPEED", "700"))   # jaw speed (arm motors hold still in a gripper command)
+GRIP_ACCEL = int(os.environ.get("GRIP_ACCEL", "30"))
+MODEL_IMG_W0 = int(os.environ.get("MODEL_IMG_W0", "1024"))   # overview photo width sent to the model (ADJUST)
+MODEL_IMG_W = int(os.environ.get("MODEL_IMG_W", "640"))      # other cameras (wrist)
+
+
+def _shrink(jpeg: bytes, max_w: int) -> tuple[bytes, tuple[int, int]]:
+    im = Image.open(io.BytesIO(jpeg))
+    if im.size[0] <= max_w:
+        return jpeg, im.size
+    h = round(im.size[1] * max_w / im.size[0])
+    buf = io.BytesIO()
+    im.convert("RGB").resize((max_w, h), Image.LANCZOS).save(buf, "JPEG", quality=88)
+    return buf.getvalue(), (max_w, h)
+APPROACH_SPEED = int(os.environ.get("APPROACH_SPEED", "120"))   # ADJUST: slow final descent onto light objects
+TILT_CLEARANCE = float(os.environ.get("TILT_CLEARANCE", "0.010"))  # m, extra height when the jaws must tilt
+# 15.11.2026: hand-guided touch at (0.239, 0.143) with jaws tilted 12 deg read z 0.037 while touching the table
+# (floor plane says 0.027): a tilted jaw edge reaches ~1 cm below the IK tool point.
+APPROACH_STEP = 0.010      # m, descend in steps this size: joint-space moves curve, short ones are nearly straight
+MAX_JOINT_JUMP = int(os.environ.get("MAX_JOINT_JUMP", "200"))   # ADJUST: max motor steps for a move < 3 cm (200 ~ 18 deg)
+EMPTY_JAWS = float(os.environ.get("EMPTY_JAWS", "0.10"))   # reading below = closed on nothing (badge 0.36). 0 = off (thin film)
+TRAVEL_Z = float(os.environ.get("TRAVEL_Z", "0.080"))   # m, height for pick/place transfers
+# Park pose out of the overview camera's view (15.11.2026: at rest the arm hid the objects). "off" disables.
+_park = os.environ.get("PARK_XY", "0.14,-0.06").strip()   # ADJUST: x,y in m
+PARK_XY = None if _park.lower() == "off" else tuple(float(v) for v in _park.split(","))
 
 
 class Abort(Exception):
@@ -195,6 +246,8 @@ class Session:
         self.moved = False            # at least one real execute happened
         self.planned: Target | None = None   # dry run only: where the arm "would be" now
         self.grip_cmd: float | None = None   # last commanded gripper opening, re-sent with every move
+        self.move_speed: int | None = None
+        self.cam0_scale = 1.0                # native overview pixels per pixel of the image the model saw   # per-move speed override (slow final approach)
         self.last_target: Target | None = None   # last pose the arm was commanded to
         self.cameras: list[dict] = []
         self._last_photo: str | None = None
@@ -253,11 +306,12 @@ class Session:
                 "width": info["width"], "height": info["height"]}
 
     def _list_cameras(self) -> list[dict]:
-        dead_ids = {"f9a49c847e496cac500305ae1f0a178e", "28ff0ca87978e8f993c2ac64a84d188a"}
-        cams = [c for c in self.ik.cameras() if c["id"] not in dead_ids]
         # Fixed numbering: IDs in CAMERA_ORDER (comma list, overview first) come first in that order.
         # Station's list order is not stable, and the prompt depends on Camera 0 = overview, 1 = wrist.
+        # With CAMERA_ORDER set, other IDs are ignored: after a USB drop Station keeps the old IDs
+        # listed with frozen frames next to the new live ones.
         order = [s.strip() for s in os.environ.get("CAMERA_ORDER", "").split(",") if s.strip()]
+        cams = [c for c in self.ik.cameras() if not order or c["id"] in order]
         cams.sort(key=lambda c: order.index(c["id"]) if c["id"] in order else len(order))
         mac = self._mac_camera()
         if mac:
@@ -367,11 +421,17 @@ class Session:
         if VERBOSE:
             print(f"    photo saved: {path}")
         self._last_photo = str(path)
+        # 15.11.2026: Station now delivers 1280x960. The model gets a smaller copy (fewer tokens, and the API would
+        # resize anything above ~1.15 MP anyway); locate() maps the model's pixel back to native pixels.
+        sent, (w, h) = _shrink(jpeg, MODEL_IMG_W0 if index == 0 else MODEL_IMG_W)
+        if index == 0:
+            self.cam0_scale = (Image.open(io.BytesIO(jpeg)).size[0]) / w
         return [
-            {"type": "text", "text": f"Photo from camera index {index} ('{cam['name']}', "
-                                     f"{cam['width']}x{cam['height']}), taken just now."},
+            {"type": "text", "text": f"Photo from camera index {index} ('{cam['name']}'), {w}x{h} pixels, taken just now."
+                                     + (" Give locate() pixel coordinates in THIS image (0..%d, 0..%d)." % (w - 1, h - 1)
+                                        if index == 0 else "")},
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
-                                         "data": base64.standard_b64encode(jpeg).decode("ascii")}},
+                                         "data": base64.standard_b64encode(sent).decode("ascii")}},
         ]
 
     def _execute_move(self, target: Target) -> dict:
@@ -385,9 +445,18 @@ class Session:
         try:
             # Send the gripper here too: without it the solver seeds motor 8 from its present angle,
             # which can sit below 0 rad and makes every solve fail with limit_violation.
-            solved = self.ik.move_to(FOLLOWER_ID, target, execute=False, gripper=self.grip_cmd)
+            arm_now = self._arm()
+            cur_steps = [j["steps"] for j in sorted(arm_now.get("joints", []), key=lambda j: j["motor"])]
+            solved = self.ik.move_to(FOLLOWER_ID, target, execute=False, gripper=self.grip_cmd,
+                                     near_steps=cur_steps or None)
         except IKError as e:
             return {"ok": False, "reason": e.short()}
+        # 15.11.2026: a short move must not need a big joint jump (IK branch flip swings the jaws into the table).
+        if current is not None and cur_steps and current.dist(target) < 0.03 \
+                and solved.get("max_joint_delta", 0) > MAX_JOINT_JUMP:
+            return {"ok": False, "reason": (f"REJECT_IK_FLIP: this {current.dist(target) * 100:.1f} cm move needs a "
+                                            f"joint jump of {solved['max_joint_delta']} steps (the arm would swing "
+                                            "through the table). Lift straight up first or choose a slightly different point.")}
         result = {"ok": True, "target": target.as_dict(), "reachable": solved["reachable"],
                   "motor_steps": solved["motor_steps"]}
         if DRY_RUN:
@@ -401,7 +470,8 @@ class Session:
         try:
             # The gripper goal is re-sent with every move so that all 8 motors are driven
             # (and hold torque) in the same command. A gripper-only command let the arm sag.
-            done = self.ik.move_to(FOLLOWER_ID, target, execute=True, gripper=self.grip_cmd)
+            done = self.ik.move_to(FOLLOWER_ID, target, execute=True, gripper=self.grip_cmd, speed=self.move_speed,
+                                   tilt=solved.get("tilt"))
         except IKError as e:
             self.last_motion = {"tool": "move_to", "status": "error", "error": e.code}
             return {"ok": False, "reason": e.short()}
@@ -424,6 +494,15 @@ class Session:
         return result
 
     def tool_move_to(self, x: float, y: float, z: float, yaw: float) -> str | list[dict]:
+        result = self._move(x, y, z, yaw)
+        if isinstance(result, str):
+            return result
+        if not result.get("executed"):
+            return json.dumps(result)
+        return [{"type": "text", "text": json.dumps(result)}] + self._photos_after_move()
+
+    def _move(self, x: float, y: float, z: float, yaw: float) -> dict | str:
+        """Guarded single move. Returns the motion result dict, or a REJECT/ERROR string."""
         # Hard rule (15.11.2026): sideways moves only at travel height. The model lowered early and crept
         # sideways near the table, dragging the object and pushing the target box. Up/down moves are always
         # allowed, so the only way to a target is: lift, move over it high, go straight down, release, lift.
@@ -441,9 +520,190 @@ class Session:
         result = self._execute_move(Target(float(x), float(y), float(z), float(yaw)))
         if not result["ok"]:
             return result["reason"]
-        if not result.get("executed"):
-            return json.dumps(result)
-        return [{"type": "text", "text": json.dumps(result)}] + self._photos_after_move()
+        return result
+
+    def _sequence(self, steps: list[tuple]) -> tuple[list[str], str | None]:
+        """Run ('move', x, y, z, yaw) / ('grip', open) steps; stop at the first failure."""
+        log: list[str] = []
+        for st in steps:
+            if st[0] == "check_open":
+                g = self._arm().get("gripper")
+                log.append(f"jaws before descent: {g}")
+                if g is not None and g < 0.9:
+                    return log, f"jaws only {g:.2f} open above the object: not going down"
+                continue
+            if st[0] == "down":                  # ('down', x, y, z_from, z_to, yaw): straight, slow, in short steps
+                _, x0, y0, z0, z1, yw = st
+                n = max(1, math.ceil((z0 - z1) / APPROACH_STEP))
+                self.move_speed = APPROACH_SPEED
+                try:
+                    sub, err = self._sequence([("move", x0, y0, z0 - (z0 - z1) * (i + 1) / n, yw) for i in range(n)])
+                finally:
+                    self.move_speed = None
+                log.append(f"straight down {z0:.3f} -> {z1:.3f} in {n} steps: " + (sub[-1].split(": ")[-1] if sub else "-"))
+                if err:
+                    return log, err
+                continue
+            if st[0] == "move":
+                r = self._move(*st[1:])
+                if isinstance(r, str):
+                    return log, f"move {st[1:]} failed: {r}"
+                status = r.get("status", "planned")
+                if status == "timeout":
+                    status = self._settle(Target(*map(float, st[1:])))
+                    if status == "timeout":          # still short: send the same target once more
+                        r = self._move(*st[1:])
+                        status = r.get("status", "error") if isinstance(r, dict) else "error"
+                        if status == "timeout":
+                            status = self._settle(Target(*map(float, st[1:])))
+                log.append(f"move to ({st[1]:.3f}, {st[2]:.3f}, {st[3]:.3f}): {status}")
+                if not DRY_RUN:
+                    # 15.11.2026: after a far-reach run the shoulder lost torque (overload) and the arm sank to
+                    # z 0.019 at the park pose, dragging the battery. Stop the whole task when the arm sags.
+                    p = self._pose_of(self._arm())
+                    if p is not None and p.z < float(st[3]) - 0.03:
+                        msg = (f"ARM_SAGGING: commanded z {float(st[3]):.3f} but the arm is at z {p.z:.3f}. "
+                               "A servo is overloaded.")
+                        self._sag_count = getattr(self, "_sag_count", 0) + 1
+                        if not KEEP_GOING or self._sag_count > MAX_SAG_CONTINUES:
+                            return log, msg + " STOP: tell the user to let the arm cool; do not move."
+                        log.append(msg + f" Continuing (KEEP_GOING=1, {self._sag_count}/{MAX_SAG_CONTINUES}).")
+                if status in ("timeout", "unknown", "stalled"):
+                    return log, f"move {st[1:]} ended '{status}': call get_state and look before going on"
+            else:
+                raw = self.tool_gripper(st[1])
+                try:
+                    r = json.loads(raw)
+                except ValueError:
+                    return log, f"gripper {st[1]} failed: {raw}"
+                log.append(f"gripper {st[1]}: {r.get('status')}")
+                if st[1] == 0.0:
+                    log.append("HELD" if r.get("status") == "stalled" else "MISSED (nothing between the jaws)")
+        return log, None
+
+    def _settle(self, target: Target, max_s: float = 8.0) -> str:
+        """After an API 'timeout' (it waits only 8 s): watch until the arm stops, then judge by distance."""
+        last, still, t0, p = None, 0, time.time(), None
+        while time.time() - t0 < max_s and still < 3:
+            time.sleep(0.4)
+            p = self._pose_of(self._arm())
+            if p is None:
+                continue
+            still = still + 1 if last is not None and p.dist(last) < 0.002 else 0
+            last = p
+        return "reached" if p is not None and p.dist(target) <= 0.015 else "timeout"
+
+    def _park_steps(self, h: Target) -> list[tuple]:
+        if PARK_XY is None:
+            return []
+        steps: list[tuple] = []
+        if h.z < SAFE_TRAVEL_Z:
+            steps.append(("move", h.x, h.y, TRAVEL_Z, h.yaw))      # straight up first
+        steps.append(("move", PARK_XY[0], PARK_XY[1], TRAVEL_Z, 0.0))
+        return steps
+
+    def park(self) -> str:
+        """Move the arm out of Camera 0's view (lift straight up first if low). Returns a one-line status."""
+        if PARK_XY is None or DRY_RUN:
+            return ""
+        h = self._here()
+        if math.hypot(h.x - PARK_XY[0], h.y - PARK_XY[1]) < 0.01 and h.z >= SAFE_TRAVEL_Z:
+            return f"The arm is already parked out of Camera 0's view at ({PARK_XY[0]}, {PARK_XY[1]}, {TRAVEL_Z})."
+        print("  ... parking out of view", flush=True)
+        self.moved = True
+        log, err = self._sequence(self._park_steps(h))
+        self.log("park", steps=log, error=err)
+        if err:
+            return f"Parking out of view failed ({err}); the arm may block Camera 0."
+        return (f"Before this task the arm was parked out of Camera 0's view at ({PARK_XY[0]}, {PARK_XY[1]}, "
+                f"{TRAVEL_Z}), so Camera 0 shows the whole table: do not move it aside again.")
+
+    def _plans(self, x: float, y: float, z: float, yaw: float) -> bool:
+        try:
+            self.ik.move_to(FOLLOWER_ID, Target(float(x), float(y), float(z), float(yaw)), execute=False)
+            return True
+        except IKError:
+            return False
+
+    def _needs_tilt(self, x: float, y: float, z: float, yaw: float) -> bool:
+        """True if the jaws cannot point straight down at (x, y, z), so ik_client falls back to a tilt."""
+        body = {"position": {"x": float(x), "y": float(y), "z": float(z)},
+                "orientation": {"rpy": {"roll": safety.ROLL, "pitch": safety.PITCH, "yaw": float(yaw)}},
+                "execute": False}
+        try:
+            self.ik._request("POST", f"/arms/{FOLLOWER_ID}/move-to", json=body)
+            return False
+        except IKError:
+            return True
+
+    def _travel_z(self, x: float, y: float, yaw: float) -> float | None:
+        """Highest usable travel height over (x, y): TRAVEL_Z near the base, lower (>= SAFE_TRAVEL_Z) far out."""
+        for z in (TRAVEL_Z, 0.070, SAFE_TRAVEL_Z + 0.002):
+            if self._plans(x, y, z, yaw):
+                return z
+        return None
+
+    def _here(self) -> Target:
+        t = self.last_target or self._pose_of(self._arm())
+        if t is None:
+            raise IKError("no_pose", "arm pose unknown")
+        return t
+
+    def tool_pick(self, x: float, y: float, yaw: float, grip_z: float) -> str | list[dict]:
+        """Whole pick in one call: lift, open, over (x, y) high, straight down, close, straight up."""
+        h = self._here()
+        tz = self._travel_z(x, y, yaw)
+        if tz is None:
+            return "REJECT_OUT_OF_REACH: no travel height above this point is reachable; ask the user to move it closer."
+        tilt_note = ""
+        if self._needs_tilt(x, y, grip_z, yaw):
+            grip_z = float(grip_z) + TILT_CLEARANCE
+            tilt_note = f"jaws tilted here: grip height raised by {TILT_CLEARANCE * 1000:.0f} mm to {grip_z:.3f}"
+        steps: list[tuple] = []
+        if h.z < SAFE_TRAVEL_Z:
+            steps.append(("move", h.x, h.y, TRAVEL_Z, h.yaw))
+        if abs(yaw - h.yaw) > 0.3:
+            steps.append(("move", h.x, h.y, max(TRAVEL_Z, h.z), yaw))     # rotate first, at height, in place
+        # 15.11.2026: open ABOVE the object and only then go down, straight and slow (a light paper ball was
+        # shoved by the jaw tips swinging on the way down).
+        steps += [("move", x, y, tz, yaw), ("grip", 1.0), ("check_open",), ("down", x, y, tz, grip_z, yaw),
+                  ("grip", 0.0), ("move", x, y, tz, yaw)]
+        log, err = self._sequence(steps)
+        text = json.dumps({"ok": err is None and "HELD" in log, "steps": log, "error": err, "note": tilt_note})
+        return [{"type": "text", "text": text}] + self._photos_after_move()
+
+    def tool_place(self, x: float, y: float, release_z: float) -> str | list[dict]:
+        """Whole place in one call: up, over (x, y) high, straight down to release_z, open, straight up."""
+        # 15.11.2026: after a MISSED pick the model decided a squashed paper ball was "held" and placed thin air.
+        # The jaw reading is the truth: closed to (almost) zero means nothing is between them.
+        g = self._arm().get("gripper")
+        if not DRY_RUN and g is not None and g < EMPTY_JAWS:
+            return (f"REJECT_NOTHING_HELD: the jaws are closed to {g:.3f} (< {EMPTY_JAWS}), so nothing is between "
+                    "them. Do not trust the photos over this. Look at Camera 0, locate the object again and call pick.")
+        h = self._here()
+        tz = self._travel_z(x, y, h.yaw)
+        if tz is None:
+            return "REJECT_OUT_OF_REACH: no travel height above the target is reachable; ask the user to move it closer."
+        if self._needs_tilt(x, y, release_z, h.yaw):
+            release_z = float(release_z) + TILT_CLEARANCE
+        if release_z > tz + 0.005:
+            # 15.11.2026: a 4 cm half cup at r 0.32 m had travel_z 0.070 = its rim height. The release was clamped
+            # down to the rim, the carry swept the battery through the cup and onto the table. Refuse instead.
+            return (f"REJECT_TARGET_TOO_FAR: release at z {release_z:.3f} is needed above this target, but the arm can "
+                    f"only reach z {tz:.3f} there. Do not try a lower release. Ask the user to move the target "
+                    "closer to the robot base (within ~0.25 m).")
+        release_z = min(release_z, tz)
+        steps: list[tuple] = []
+        if h.z < SAFE_TRAVEL_Z:
+            steps.append(("move", h.x, h.y, tz, h.yaw))
+        steps += [("move", x, y, tz, h.yaw), ("down", x, y, tz, release_z, h.yaw),
+                  ("grip", 1.0), ("move", x, y, tz, h.yaw)]
+        if PARK_XY is not None:
+            steps.append(("move", PARK_XY[0], PARK_XY[1], TRAVEL_Z, 0.0))   # clear the view for the check photo
+        log, err = self._sequence(steps)
+        text = json.dumps({"ok": err is None, "steps": log, "error": err,
+                           "note": "arm parked out of view; the Camera 0 photo shows the result" if PARK_XY else ""})
+        return [{"type": "text", "text": text}] + self._photos_after_move()
 
     def tool_gripper(self, opening: float) -> str:
         opening = float(opening)
@@ -474,7 +734,7 @@ class Session:
             # Follower motor 8 accepts goals but its position read-back is frozen (15.11.2026), so every
             # feedback-based check (stall, relief, "closed fully") would be wrong. Send and trust.
             sent = max(opening, BLIND_CLOSE_MIN) if opening < 0.5 else opening
-            done = self.ik.move_to(FOLLOWER_ID, hold, execute=True, gripper=sent)
+            done = self.ik.move_to(FOLLOWER_ID, hold, execute=True, gripper=sent, speed=GRIP_SPEED, accel=GRIP_ACCEL)
             time.sleep(2.0)                      # jaws are slow; no feedback to wait on
             self.last_target = hold
             self.grip_cmd = sent
@@ -482,7 +742,7 @@ class Session:
             return json.dumps({"ok": True, "requested_open": opening, "sent_open": sent, "status": "sent",
                                "note": "gripper has NO position feedback: check the cameras. After closing, "
                                        "lift straight up and look: the object must be between the jaws, off the table."})
-        done = self.ik.move_to(FOLLOWER_ID, hold, execute=True, gripper=opening)
+        done = self.ik.move_to(FOLLOWER_ID, hold, execute=True, gripper=opening, speed=GRIP_SPEED, accel=GRIP_ACCEL)
         self.last_target = hold
         status = done["motion"]["status"]
         if status == "timeout":
@@ -507,12 +767,12 @@ class Session:
             status = "reached"          # opened to the mechanical end, that is not a stall
             result["status"] = status
         if closing and stopped_short:
-            relief = min(1.0, after + safety.GRIP_RELIEF)
-            relieved = self.ik.move_to(FOLLOWER_ID, hold, execute=True, gripper=relief)
+            relief = min(1.0, max(0.0, after + safety.GRIP_RELIEF))
+            relieved = self.ik.move_to(FOLLOWER_ID, hold, execute=True, gripper=relief, speed=GRIP_SPEED, accel=GRIP_ACCEL)
             self.grip_cmd = relief
             result.update({"status": "stalled", "stopped_at": round(after, 3), "relieved_to": round(relief, 3),
                            "relief_status": relieved["motion"]["status"],
-                           "note": "jaws met an object and hold it; grip relieved to avoid servo overload"})
+                           "note": "jaws met an object and hold it with a steady moderate squeeze"})
             status = "stalled"
         elif closing and opening == 0.0:
             # 15.11.2026: a miss used to abort the whole task. Now it is a normal result so the model retries.
@@ -563,15 +823,28 @@ class Session:
         if not self.cameras or self.cameras[0]["id"] != cal["camera_id"]:
             return "ERROR calibration is for another camera than Camera 0; check CAMERA_ORDER."
         H = cal["H_pixel_to_xy"]
+        u, v = float(u) * self.cam0_scale, float(v) * self.cam0_scale      # model image -> native pixels
+        native = [self.cameras[0].get("width"), self.cameras[0].get("height")]
+        cs = cal.get("image_size")
+        if cs and list(cs) != native and native[0] and abs(cs[0] / cs[1] - native[0] / native[1]) < 0.01:
+            # 15.11.2026: after a USB drop Station fell back to 640x480. Same 4:3 sensor view: just scale.
+            u, v = u * cs[0] / native[0], v * cs[1] / native[1]
+        elif cs and list(cs) != native:
+            return (f"ERROR calibration was made at {cal['image_size']} but Camera 0 now delivers {native}: "
+                    "run calib_overview.py again; estimate positions from the photos meanwhile.")
         w = H[2][0] * u + H[2][1] * v + H[2][2]
         x = (H[0][0] * u + H[0][1] * v + H[0][2]) / w
         y = (H[1][0] * u + H[1][1] * v + H[1][2]) / w
         floor = 0.0056 + 0.083 * x + 0.011 * y      # floor plane 15.11.2026, see camera notes
         r = math.hypot(x, y)
+        # Reach is checked with the IK solver (plan only, no motion): grip height and a travel height above it.
+        travel = self._travel_z(x, y, 0.0)
+        reachable = travel is not None and self._plans(x, y, floor + 0.010, 0.0)
         return json.dumps({"x": round(x, 4), "y": round(y, 4), "z_floor": round(floor, 4),
-                           "reach_radius": round(r, 3), "reachable_from_above": r <= REACH_FROM_ABOVE,
+                           "reach_radius": round(r, 3), "reachable_from_above": reachable,
+                           "travel_z": travel,
                            "accuracy_mm": cal.get("rms_mm"),
-                           "note": "if not reachable_from_above, tell the user to move the object closer to the base"})
+                           "note": "accurate for jaws at yaw 0 (calibrated yaw); other yaws can be off by up to ~2 cm. If not reachable_from_above, tell the user to move the object closer to the base"})
 
     def run_tool(self, name: str, args: dict) -> tuple[str | list[dict], bool]:
         """Returns (tool_result content, is_error)."""
@@ -588,6 +861,10 @@ class Session:
                 out = self.tool_go_rest()
             elif name == "locate":
                 out = self.tool_locate(args["u"], args["v"])
+            elif name == "pick":
+                out = self.tool_pick(args["x"], args["y"], args["yaw"], args["grip_z"])
+            elif name == "place":
+                out = self.tool_place(args["x"], args["y"], args["release_z"])
             else:
                 return f"ERROR unknown tool '{name}'", True
         except IKError as e:
@@ -641,7 +918,11 @@ class Session:
 
     def _run_task(self, task: str) -> None:
         self.log("task", text=task)
-        self.messages.append({"role": "user", "content": task})
+        try:
+            parked = self.park()
+        except IKError as e:
+            parked = f"Parking out of view failed ({e.short()})."
+        self.messages.append({"role": "user", "content": f"{task}\n\n{parked}".strip()})
         calls = 0
         while True:
             t_model = time.time()

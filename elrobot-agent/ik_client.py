@@ -100,35 +100,67 @@ class IKClient:
         raise IKError("not_found", f"arm {arm_id} is not on the Station", {"candidates": [a["id"] for a in arms]})
 
     # -------------------------------------------------------------- motion --
-    def move_to(self, arm_id: str, target: safety.Target, execute: bool = False,
-                gripper: float | None = None) -> dict:
-        """Solve (execute=False) or solve and move (execute=True). Vertical gripper first;
-        if a far target is unreachable with pitch=0, automatically falls back to a slight
-        forward tilt (pitch = -0.15, then -0.28 rad) so reach extends out to x=0.28 m.
+    TILTS = (0.0, -0.15, -0.28, -0.40, -0.55, -0.70, -0.85)
 
-        gripper (0..1) is written together with the arm joints when given, so all 8 motors
-        get torque and a goal in the same command.
+    def _move_body(self, target: safety.Target, tilt: float, execute: bool, gripper: float | None,
+                   speed: int | None, accel: int | None) -> dict:
+        t = tilt + safety.TILT_TRIM
+        body = {
+            "position": {"x": target.x, "y": target.y, "z": target.z},
+            "orientation": {"rpy": {"roll": safety.ROLL + t * math.sin(target.yaw),
+                                    "pitch": safety.PITCH + t * math.cos(target.yaw), "yaw": target.yaw}},
+            "execute": bool(execute),
+            "speed": speed or safety.SPEED,
+            "accel": accel or safety.ACCEL,
+        }
+        if gripper is not None:
+            body["gripper"] = min(1.0, max(0.0, float(gripper)))
+        return body
+
+    def move_to(self, arm_id: str, target: safety.Target, execute: bool = False,
+                gripper: float | None = None, speed: int | None = None, accel: int | None = None,
+                near_steps: list[int] | None = None, tilt: float | None = None) -> dict:
+        """Solve (execute=False) or solve and move (execute=True).
+
+        tilt given: use exactly that jaw tilt. near_steps given (current motor steps 1..7): try every tilt and
+        return the solution closest to the current joints, with 'tilt' and 'max_joint_delta' added.
+        Otherwise: vertical first, then steeper forward tilts until one solves (reach out to ~0.36 m).
+        15.11.2026: neighbouring heights could solve to a flipped elbow (motor 3 jumped 350 steps for 8 mm),
+        the joint-space move swung the jaws into the table. near_steps picks the closest branch.
         """
+        url = f"/arms/{arm_id}/move-to"
+        if tilt is not None:
+            r = self._request("POST", url, json=self._move_body(target, tilt, execute, gripper, speed, accel)).json()
+            r["tilt"] = tilt
+            return r
         last_err: IKError | None = None
-        for tilt in (0.0, -0.15, -0.28, -0.40):
-            roll = safety.ROLL + tilt * math.sin(target.yaw)
-            pitch = safety.PITCH + tilt * math.cos(target.yaw)
-            body = {
-                "position": {"x": target.x, "y": target.y, "z": target.z},
-                "orientation": {"rpy": {"roll": roll, "pitch": pitch, "yaw": target.yaw}},
-                "execute": bool(execute),
-                "speed": safety.SPEED,
-                "accel": safety.ACCEL,
-            }
-            if gripper is not None:
-                body["gripper"] = min(1.0, max(0.0, float(gripper)))
+        best: dict | None = None
+        for t in self.TILTS:
             try:
-                return self._request("POST", f"/arms/{arm_id}/move-to", json=body).json()
+                r = self._request("POST", url, json=self._move_body(
+                    target, t, execute and near_steps is None, gripper, speed, accel)).json()
             except IKError as e:
                 last_err = e
-                if e.code != "unreachable":
+                # vertical may collide or hit a joint limit where a tilt works: try the next tilt
+                if e.code not in ("unreachable", "collision", "limit_violation"):
                     raise
-        raise last_err  # type: ignore[misc]
+                continue
+            r["tilt"] = t
+            if near_steps is None:
+                return r
+            steps = r.get("motor_steps") or []
+            # flip check on motors 1-6 only: motor 7 turns the jaws (a wanted yaw change is not a flip)
+            r["max_joint_delta"] = max((abs(a - b) for a, b in zip(steps[:6], near_steps[:6])), default=0)
+            r["_closeness"] = sum(abs(a - b) for a, b in zip(steps[:7], near_steps[:7]))
+            if best is None or r["_closeness"] < best["_closeness"]:
+                best = r
+        if best is None:
+            raise last_err  # type: ignore[misc]
+        if execute:
+            r = self._request("POST", url, json=self._move_body(target, best["tilt"], True, gripper, speed, accel)).json()
+            r["tilt"], r["max_joint_delta"] = best["tilt"], best["max_joint_delta"]
+            return r
+        return best
 
     def gripper(self, arm_id: str, opening: float) -> dict:
         body = {"open": opening, "speed": safety.SPEED, "accel": safety.ACCEL}

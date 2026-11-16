@@ -1,5 +1,9 @@
 Camera index 0 = overview, CALIBRATED (calib/overview_homography.json). Do not estimate positions from it yourself:
   look at Camera 0, find the pixel (u, v) of the object's center and of the target's center, and call locate(u, v).
+  Calibrated area (15.11.2026 20:14, 1280x960, 21 points, RMS 4.2 mm, max 8 mm; jaws truly vertical with TILT_TRIM): x 0.11..0.285, y -0.14..+0.14. Reach goes to
+  ~0.36 m with steeply tilted jaws; beyond 0.285 m locate is extrapolated (expect 1-2 cm error): fine for a large
+  target to drop onto, risky for a small object to pick. Far points (x > 0.22) are
+  reached with the jaws tilted forward automatically and a lower travel height (pick/place handle both).
   Use the returned x, y directly. If locate says not reachable_from_above, stop and ask the user to move the object.
   If locate returns no_calibration, fall back to: one 0.02 m test step in +x and +y at hover to learn the picture directions.
 
@@ -9,6 +13,8 @@ GROUND-TRUTH WORKSPACE & FLOOR CALIBRATION:
     e.g. z_floor 0.018 at (x 0.15, y 0), 0.021 at (0.18, 0.03), 0.023 at (0.21, 0.04), 0.025 at (0.24, 0).
     Every height below is ABOVE THIS FLOOR: grip z = z_floor(x, y) + offset. Never command z below z_floor(x, y) - 0.002.
   - Under torque the arm sags 2..8 mm BELOW the commanded z (more at long reach), so the real tips are lower than commanded.
+  - TILTED JAWS (far points, ~x > 0.22): a hand-guided touch at (0.239, 0.143) read z 0.037 with the jaws ON the table
+    (plane says 0.027). pick/place add TILT_CLEARANCE (10 mm) automatically there; do not lower grip_z to compensate.
   - NEVER change x or y while z < 0.065 m! Always lift straight up to z = 0.075 m before making ANY horizontal (x, y) adjustment, or the open jaws will sweep and push the object across the table!
 
 Camera index 1 = WRIST camera (re-mounted 15.11.2026 afternoon), on the gripper, rotates with yaw.
@@ -17,20 +23,22 @@ Camera index 1 = WRIST camera (re-mounted 15.11.2026 afternoon), on the gripper,
   the object moves in Camera 1. Use Camera 1 to center the object between the jaws before closing.
 
 OBJECTS IN THIS SCENE: the object to pick and the target are named in the task message.
-  - Grip a flat round object (disc, badge, lid) across its diameter; any yaw works, choose a reachable one.
+  - CALIBRATION IS AT YAW 0 ONLY (15.11.2026): locate is right for jaws at yaw 0. Turning the jaws shifts the grip
+    point by up to ~2 cm (yaw 1.57 grips landed ~2 cm closer to the base). So use yaw 0 whenever the shape allows.
+  - Grip a flat round object (disc, badge, lid) across its diameter with yaw 0. Always yaw 0 for round objects.
   - Grip a long object across its narrow width at its middle (handle for tools, never a blade).
   - The target (brown box / cardboard) top is at z = z_floor + TARGET_TOP_Z (task message).
 
-Procedure for "pick the object, place it on the target":
-  1. If z < 0.065 m, lift straight up to z = 0.080 m first. Do not open the gripper before that.
-  2. Find the object and the target in Camera 0 and get both positions with locate(u, v).
-  3. Open the gripper (gripper(1.0)), move to a pre-pose above the object at z = 0.080.
-  4. Fine-center with Camera 1 only if the object is clearly off the jaw midline (steps of 0.005 m); trust locate otherwise.
-     If Camera 1 returns exactly the same picture twice in a row, it is frozen: ignore it and use Camera 0 only.
-  5. Straight down to grip height (task message; keep x, y, yaw identical).
-  6. Close (gripper(0.0)). "stalled" = held. "missed" = open, lift to 0.080, re-center, retry.
-  7. Lift straight up to z = 0.080.
-  8. Move at z = 0.080 to above the target's center. If unreachable, use the nearest reachable point still well inside the target.
-  9. Lower STRAIGHT down (same x, y) to the release height from the task message. It is ~3 cm above the target on
-     purpose: do not go lower, the object drops the rest. Open the gripper there, then lift straight up to z = 0.080.
-  10. Check Camera 0: the object lies on the target. Done.
+FAST procedure (preferred, few calls) for "pick the object, place it on the target":
+  1. The arm starts parked out of Camera 0's view (see the task message). look at Camera 0 once and find the pixel
+     centers of the object and the target. Do not move the arm aside to see better.
+  2. locate(u, v) for both. Stop and ask the user if one is not reachable_from_above.
+  3. pick(x, y, yaw, grip_z) with the object's x, y. It lifts, opens, goes over the object at the travel height,
+     straight down, closes, lifts. Result HELD = go on. MISSED = the jaws closed on nothing. This is FINAL, never
+     argue it away from photos (soft paper does not fool it). Check the photos, correct x/y, call pick again.
+     A tall object (ball) can sit 1-2 cm off the locate point: before the retry, hover at 0.080 and center it in Camera 1.
+  4. place(x, y, release_z) with the target's x, y and the release height from the task message. It carries at the
+     travel height, goes straight down, opens ~3 cm above the target, lifts.
+  5. place ends parked out of view: check its Camera 0 photo, the object lies on the target. Done (no extra look needed).
+  Use move_to / gripper only for corrections the macros cannot do. The low-sideways rule still applies to them.
+  If Camera 1 returns exactly the same picture twice in a row, it is frozen: ignore it and use Camera 0 only.

@@ -22,4 +22,4 @@ The table is about 2 cm above z 0 (floor plane in the camera notes): grip it at 
 release it at z = ${PLACE_Z} above the cardboard center, then lift straight up and confirm with Camera 0 that it lies on the cardboard."
 
 echo "Task: $TASK"
-CAMERA_ORDER=43640b79a54e71f45e0443ffbb92880a,efd6933351072d2a8004e1cffb19adb3 CAMERA_NOTES=camera_notes_sharpie.txt exec uv run python agent.py "$TASK"
+CAMERA_ORDER=28ff0ca87978e8f993c2ac64a84d188a,f9a49c847e496cac500305ae1f0a178e CAMERA_NOTES=camera_notes_sharpie.txt exec uv run python agent.py "$TASK"

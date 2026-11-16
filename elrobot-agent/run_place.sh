@@ -19,8 +19,8 @@ TRAVEL_Z=$(python3 -c "print(round(max(0.080, $FLOOR_Z + $TARGET_TOP_Z + $RELEAS
 
 TASK="Pick up ${OBJECT} from the table and place it on ${TARGET}. \
 Grip it at z = z_floor + ${GRIP_ABOVE_FLOOR} (the table is about 2 cm above z 0, floor plane in the camera notes). \
-TARGET_TOP_Z = ${TARGET_TOP_Z}. Carry it at z = ${TRAVEL_Z}, go straight down over the center of ${TARGET} to z = ${PLACE_Z} and open the jaws there (do not touch the target), \
+TARGET_TOP_Z = ${TARGET_TOP_Z}. Use the fast tools: locate, then pick(x, y, yaw, grip_z), then place(x, y, release_z = ${PLACE_Z}). Carry it at z = ${TRAVEL_Z}, go straight down over the center of ${TARGET} to z = ${PLACE_Z} and open the jaws there (do not touch the target), \
 then lift straight up and confirm with Camera 0 that it lies on ${TARGET}."
 
 echo "Task: $TASK"
-CAMERA_ORDER=43640b79a54e71f45e0443ffbb92880a,efd6933351072d2a8004e1cffb19adb3 CAMERA_NOTES=camera_notes_place.txt exec uv run python agent.py "$TASK"
+KEEP_GOING=${KEEP_GOING:-1} TRAVEL_Z=$TRAVEL_Z CAMERA_ORDER=28ff0ca87978e8f993c2ac64a84d188a,f9a49c847e496cac500305ae1f0a178e CAMERA_NOTES=camera_notes_place.txt exec uv run python agent.py "$TASK"

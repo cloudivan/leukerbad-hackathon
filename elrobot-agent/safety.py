@@ -12,20 +12,26 @@ center of the closed jaws' tip edge.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 
 # ---------------------------------------------------------------- ADJUST ----
 # Servo speed and acceleration, sent with every command (these are settings, not limits;
 # the API clamps them to 100..1500 and 5..100).
-SPEED = 200                   # ADJUST
+SPEED = min(400, int(os.environ.get("ARM_SPEED", "200")))   # ADJUST, env override, capped at 400
 ACCEL = 10                    # ADJUST
 
 # Orientation: the agent only ever asks for a vertical gripper and chooses yaw.
 ROLL = -1.5708                # ADJUST (vertical gripper, approach axis down)
 PITCH = 0.0                   # ADJUST
 
-# After a stalled close the gripper is re-sent this much wider (AGENTS.md of the IK API).
-GRIP_RELIEF = 0.05            # ADJUST
+# After a stalled close the gripper goal is re-set to (stop point + GRIP_RELIEF).
+# 15.11.2026: +0.05 put the goal OUTSIDE the object, so the hold force dropped to ~0 and an upright
+# battery slipped out. Negative = keep the goal slightly inside the object for a steady, moderate squeeze.
+GRIP_RELIEF = float(os.environ.get("GRIP_RELIEF", "-0.04"))   # ADJUST, env override
+# Wrist trim (rad), added to every tilt: the arm reads vertical while the jaws are visibly not.
+# Negative tips the jaw tips away from the base, positive toward it.
+TILT_TRIM = float(os.environ.get("TILT_TRIM", "0.17"))   # ADJUST, env override
 # -----------------------------------------------------------------------------
 
 

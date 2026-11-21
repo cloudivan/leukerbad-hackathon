@@ -1,0 +1,35 @@
+Camera index 0 = FRONT-TOP overview, mounted in front of the workspace (+X side) looking back toward the robot base.
+  The robot base is at the TOP-CENTER of the picture and the arm reaches DOWN toward the bottom of the frame.
+  - Picture DOWN  = +X (further forward away from the base).
+  - Picture UP    = -X (closer to the base) and +Z (higher).
+  - Picture RIGHT = +Y (the robot's left side; increase y to move right in Camera 0).
+  - Picture LEFT  = -Y (the robot's right side; decrease y to move left in Camera 0).
+
+GROUND-TRUTH WORKSPACE & FLOOR CALIBRATION:
+  - The wooden table surface is at z = 0.000 m with a vertical gripper (measured 15.11.2026 at 10 points, +-3 mm, flat over the whole table).
+  - Under torque the arm sags 2..8 mm BELOW the commanded z (more at long reach), so the real tips are lower than commanded.
+  - NEVER command z below 0.005 m.
+  - NEVER change x or y while z < 0.065 m! Always lift straight up to z = 0.075 m before making ANY horizontal (x, y) adjustment, or the open jaws will sweep and push the object across the table!
+  - For the white USB charger (~20 mm thick lying flat on the table), hover at z = 0.075 m to align (x, y), and then move straight down to z = 0.008..0.012 m so the jaws close around the middle of the white plastic body.
+
+Camera index 1 = WRIST camera, mounted on the gripper (rotates with yaw!).
+  It looks down at an oblique angle toward the two black parallel jaws at the bottom of the frame.
+  IMPORTANT: Because Camera 1 rotates with the wrist (yaw):
+  1. When yaw = 1.5708 (jaws open left-to-right along Y, across a lengthwise object):
+     - The wrist camera is on the FRONT (+X) of the gripper looking BACKWARD (-X, same direction as Front Camera 0!):
+     - Picture RIGHT in Camera 1 = +Y (increase y to bring an object on the right into the center between the jaws).
+     - Picture LEFT  in Camera 1 = -Y (decrease y to bring an object on the left into the center between the jaws).
+     - Picture UP    in Camera 1 = -X (closer to the base; decrease x).
+     - Picture DOWN  in Camera 1 = +X (further from the base; increase x).
+     - X PARALLAX AT HOVER: Camera 1 looks down and toward -X (picture UP = -X, verified by moving +X: objects move UP in the picture).
+       So an object that appears just beyond the jaw tips (higher in the picture) is at SMALLER x than the tips: DECREASE x.
+       Magnitude not yet measured (roughly 2-3 cm at z 0.075). Do NOT add +0.028 m (that sign was wrong and caused misses).
+
+Procedure that works every time:
+  1. First, if z < 0.065 m, lift straight up to z = 0.075 m (e.g. x = 0.16, y = 0.0, z = 0.075, yaw = 0.0) BEFORE opening the gripper or rotating yaw, so the jaws do not hit the table or push the charger!
+  2. In the current scene, the white charger has been moved much closer to the robot base, lying lengthwise along X right near the center at approximately x = 0.185..0.195 m, y = -0.005..-0.015 m.
+  3. Since the charger's narrow 38 mm width is along Y (left-to-right), use yaw = 1.5708 so the two jaws open sideways along Y across the white plastic body!
+  4. Open the gripper (gripper(1.0)) and move to a pre-pose at x = 0.190, y = -0.010, z = 0.075, yaw = 1.5708.
+  5. Check Camera 1 and Camera 0: when hovering at z = 0.075 m with yaw = 1.5708, when the jaw tips are directly above the middle of the white plastic body, the USB-A back end of the charger will be near the bottom of Camera 1 (between the lower parts of the two black fingers), and in Camera 0 the black jaw tips will sit directly over the middle of the white plastic body.
+  6. Move straight down to z = 0.010 m (keeping x, y, yaw identical).
+  7. Close the gripper (gripper(0.0)), then lift straight up to z = 0.080 m.

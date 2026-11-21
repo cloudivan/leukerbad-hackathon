@@ -1,0 +1,15 @@
+[project]
+name = "elrobot-agent"
+version = "0.1.0"
+description = "Claude-controlled ElRobot follower via the NormaCore elrobot-ik HTTP API"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic",
+    "httpx",
+    "python-dotenv",
+    "flask",
+    "opencv-python-headless>=5.0.0.93",
+    "mujoco>=4.0.1",
+    "pyarrow>=26.0.1",
+    "pillow>=13.0.0",
+]

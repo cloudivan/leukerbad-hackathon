@@ -9,9 +9,13 @@ drivers:
   system-info: true
   usb-video:
     enabled: true
-    resize_target: 224
-    formats: []
-    frame-skip: 0
+    resize_target: 0          # 15.11.2026: was 224 (299x224 frames, 3-5 mm per pixel). 0 = keep the native size.
+    formats:                  # ADJUST: first one the camera supports wins
+    - format: "1280x960@30fps,420v"     # these cameras offer only 420v / yuvs on macOS, no MJPEG
+    - format: "1024x768@30fps,420v"
+    - format: "640x480@30fps,420v"
+    frame-skip: 5             # keep 1 of 6 frames (5 fps): the agent takes single photos, not video
+    codec: jpeg               # one JPEG per frame (VP8 at 1280x960 costs CPU)
 inference:
 - queue-id: inference/normvla
   shm: /tmp/normvla

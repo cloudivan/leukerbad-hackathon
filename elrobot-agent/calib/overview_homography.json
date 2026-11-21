@@ -1,19 +1,19 @@
 {
- "camera_id": "28ff0ca87978e8f993c2ac64a84d188a",
+ "camera_id": "2e93ac9a84b60b296ca4e4dbd3195608",
  "H_pixel_to_xy": [
   [
-   -0.0002764167592831431,
-   -0.0016660547160576675,
-   1.9783647816112775
+   -0.00020836391446296868,
+   -0.0021891021312029366,
+   2.4026913208071012
   ],
   [
-   -0.0022143529107161706,
-   0.00040599545990885403,
-   1.3913296119774583
+   -0.0027959219540513993,
+   0.0010549208162536636,
+   1.7007507634908623
   ],
   [
-   -0.00016601321314993887,
-   0.0033243889128463633,
+   -0.0006511852877819656,
+   0.0062110293262995385,
    1.0
   ]
  ],
@@ -21,11 +21,10 @@
   1280,
   960
  ],
- "points": 21,
- "rms_mm": 4.2,
- "max_mm": 8.0,
- "source": "/Users/mac/Developer/leukerbad-hackathon/elrobot-agent/logs/calib_overview_20261115_200926",
- "time": "2026-11-16 00:06",
- "z_note": "fitted with the jaw tips touching the table, pixel -> commanded x, y",
- "note": "20:14 calibration mapped through a live->reference table homography (15 inliers)"
+ "points": 11,
+ "rms_mm": 10.1,
+ "max_mm": 16.7,
+ "source": "/Users/mac/Developer/leukerbad-hackathon/elrobot-agent/logs/calib_overview_20261121_134751",
+ "time": "2026-11-21 13:53",
+ "z_note": "fitted with the jaw tips touching the table, pixel -> commanded x, y"
 }

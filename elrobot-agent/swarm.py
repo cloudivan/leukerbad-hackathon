@@ -65,7 +65,7 @@ load_dotenv(ENV_FILE)
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5").strip()
 IK_URL = os.environ.get("IK_URL", "http://127.0.0.1:8020").strip()
-FOLLOWER_ID = os.environ.get("FOLLOWER_ID", "5B79015365").strip()
+FOLLOWER_ID = os.environ.get("FOLLOWER_ID", "5B79016927").strip()
 REAL_MIN_Z = 0.005   # ADJUST: measured 15.11: table floor is z 0.000 (vertical gripper), arm sags 2..8 mm below command
 
 DRY_RUN = os.environ.get("DRY_RUN", "1").strip() != "0"
@@ -1165,7 +1165,7 @@ def api_action():
         return jsonify(ok=started)
     if act == "toggle_real":
         world.sync_real = bool(data.get("sync_real", False))
-        mode_str = "LIVE HARDWARE MIRROR (Arm 0 -> 5B79015365)" if world.sync_real else "SIMULATION ONLY"
+        mode_str = "LIVE HARDWARE MIRROR (Arm 0 -> 5B79016927)" if world.sync_real else "SIMULATION ONLY"
         world.log_event("mode", f"Switched mode to: {mode_str}")
         return jsonify(ok=True, sync_real=world.sync_real)
     return jsonify(ok=False, error="unknown action"), 400
@@ -1291,7 +1291,7 @@ SWARM_HTML = """<!doctype html>
     </div>
 
     <div class="panel">
-      <h2>Real Hardware Twin (Green Arm 0 -> 5B79015365)</h2>
+      <h2>Real Hardware Twin (Green Arm 0 -> 5B79016927)</h2>
       <div class="toggle-row">
         <span>Mirror Arm 0 to Physical Follower</span>
         <input type="checkbox" id="sync-real-box" onchange="toggleReal(this.checked)">

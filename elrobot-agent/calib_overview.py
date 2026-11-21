@@ -42,8 +42,8 @@ OUT_FILE = HERE / "calib" / "overview_homography.json"
 ROWS = [(0.13, [-0.10, 0.0, 0.10]),            # 15.11.2026 23:05: 15 points, camera now in front
         (0.17, [-0.12, 0.0, 0.12]),
         (0.21, [-0.12, 0.0, 0.12]),
-        (0.25, [-0.10, 0.0, 0.10]),
-        (0.28, [-0.06, 0.0, 0.06])]
+        (0.25, [-0.10, 0.0, 0.10])]
+# 21.11.2026: x 0.28 row dropped (tilted jaws reach ~1 cm below the tool point, too close to the mat). 12 points.
 TIP_ABOVE_FLOOR = 0.002           # m, jaw tips just touching the table (15.11.2026 22:50: 12 mm was too high, parallax)
 TIP_ABOVE_FLOOR_FAR = 0.008       # m, x >= 0.24: tilted jaws, their edge reaches ~1 cm below the tool point
 SAFE_HIGH_Z = 0.090               # m, detour height when a path between points collides
@@ -53,9 +53,13 @@ SCALE = 1                         # photos are shown at native size (1280x960 si
 # -----------------------------------------------------------------------------
 
 
+MIN_Z = 0.030                     # m, hard floor for every command (21.11.2026 operator rule)
+FLOOR_OFFSET = float(os.environ.get("FLOOR_OFFSET", "0.0"))   # m, set from the 21.11.2026 touch check
+
+
 def z_floor(x: float, y: float) -> float:
-    """Floor plane measured 15.11.2026 15:30 (camera_notes_place.txt)."""
-    return 0.0056 + 0.083 * x + 0.011 * y
+    """Floor fit logs/floor_probe_20261115_152530.json, confirmed 21.11.2026 at x 0.19 (FK z 0.029)."""
+    return 0.03385 - 0.02625 * x + FLOOR_OFFSET
 
 
 def wait_still(ik: IKClient, max_s: float = 10.0) -> None:
@@ -100,7 +104,7 @@ def capture() -> Path:
     out.mkdir(parents=True)
     points = []
     order = [(x, y) for i, (x, ys) in enumerate(ROWS) for y in (ys if i % 2 == 0 else ys[::-1])]
-    tip = lambda x, y: round(z_floor(x, y) + (TIP_ABOVE_FLOOR_FAR if x >= 0.24 else TIP_ABOVE_FLOOR), 4)
+    tip = lambda x, y: max(MIN_Z, round(z_floor(x, y) + (TIP_ABOVE_FLOOR_FAR if x >= 0.24 else TIP_ABOVE_FLOOR), 4))
     # Plan every pose first (no motion): abort before moving if any point is unreachable or collides.
     ok = []
     for x, y in order:
